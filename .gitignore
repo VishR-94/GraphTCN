@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS and VS Code
+.DS_Store
+.vscode/
+
+# Local data and generated outputs
+data/
+artifacts/
+outputs/
+checkpoints/
+
+# Model checkpoints
+*.pt
+*.pth
+*.ckpt
