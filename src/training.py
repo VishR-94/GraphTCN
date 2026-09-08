@@ -90,13 +90,15 @@ def _epoch(model, loader, step, device, optimizer=None, scaler=None, use_amp=Fal
 
 
 def _train(model, train_data, val_data, save_path, step, batch_size, lr, graph_lr, decay_start,
-           decay_factor=0.9, max_epochs=100, patience=10, clip=1.0, seed=42, device=None):
+           decay_factor=0.9, max_epochs=100, patience=10, clip=1.0, seed=42, device=None,
+           val_step=None, val_batch_size=None):
     torch.manual_seed(seed)
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"))
     model = model.to(device)
 
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+    val_loader = DataLoader(val_data, batch_size=val_batch_size or batch_size, shuffle=False)
+    val_step = val_step or step     
     optimizer = _optimizer(model, lr, graph_lr)
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
@@ -109,7 +111,7 @@ def _train(model, train_data, val_data, save_path, step, batch_size, lr, graph_l
     for epoch in range(1, max_epochs + 1):
         _set_learning_rate(optimizer, epoch, decay_start, decay_factor)
         train_loss = _epoch(model, train_loader, step, device, optimizer, scaler, use_amp, clip)
-        val_loss = _epoch(model, val_loader, step, device, use_amp=use_amp)
+        val_loss = _epoch(model, val_loader, val_step, device, use_amp=use_amp)
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
 
         if val_loss < best_loss:

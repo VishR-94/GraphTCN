@@ -12,7 +12,7 @@ from arch import arch_model
 from statsmodels.tsa.api import VAR
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from torch import nn
-
+from pmdarima.arima import auto_arima
 from src.data.finance import CONTEXT_LENGTH, HORIZONS, INPUT_CHANNELS, STRIDE
 
 
@@ -85,37 +85,57 @@ class ModernTCNBaseline(nn.Module):
 
 
 class ArimaBaseline:
-    def __init__(self, order=(1, 0, 1), trend="c", maxiter=50):
-        self.order, self.trend, self.maxiter = order, trend, maxiter
+    def __init__(self, max_p=3, max_q=3, trend="c", maxiter=50):
+        self.max_p, self.max_q = max_p, max_q
+        self.trend, self.maxiter = trend, maxiter
 
     def fit(self, train_split):
         returns = _training_returns(train_split)
         self.means = returns.mean(0)
-        self.models = []
+        self.models, self.orders = [], []
+
         for series in returns.T:
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    model = SARIMAX(series, order=self.order, trend=self.trend,
-                                    enforce_stationarity=True, enforce_invertibility=True)
-                    fitted = model.fit(method="powell", disp=False, maxiter=self.maxiter,
-                                       cov_type="none", low_memory=True, full_output=False)
+
+                    order = tuple(auto_arima(
+                        series, start_p=0, start_q=0, max_p=self.max_p, max_q=self.max_q,
+                        d=0, stationary=True, seasonal=False, information_criterion="aic",
+                        stepwise=True, suppress_warnings=True, error_action="ignore",
+                        with_intercept=True, maxiter=self.maxiter,
+                    ).order)
+
+                    fitted = SARIMAX(
+                        series, order=order, trend=self.trend,
+                        enforce_stationarity=True, enforce_invertibility=True,
+                    ).fit(method="powell", disp=False, maxiter=self.maxiter,
+                          cov_type="none", low_memory=True, full_output=False)
+
             except Exception:
-                fitted = None
+                order, fitted = None, None
+
+            self.orders.append(order)
             self.models.append(fitted)
+
         return self
 
     def _forecast(self, context):
         output = np.empty((MAX_HORIZON, context.shape[1]))
+
         for i, model in enumerate(self.models):
             if model is None:
                 output[:, i] = self.means[i]
-            else:
-                try:
-                    output[:, i] = np.nan_to_num(
-                        model.apply(context[:, i], refit=False).forecast(MAX_HORIZON), nan=self.means[i])
-                except Exception:
-                    output[:, i] = self.means[i]
+                continue
+
+            try:
+                forecast = model.apply(context[:, i], refit=False).forecast(MAX_HORIZON)
+                output[:, i] = np.nan_to_num(
+                    forecast, nan=self.means[i], posinf=self.means[i], neginf=self.means[i]
+                )
+            except Exception:
+                output[:, i] = self.means[i]
+
         return output
 
     def predict(self, split):
