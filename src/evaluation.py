@@ -1,6 +1,7 @@
 import torch
 from torch.utils.data import DataLoader
 
+# Financial Price metrics
 
 def _device(device=None):
     if device:
@@ -126,7 +127,7 @@ def evaluate_model(model, dataset, batch_size=64, device=None):
     result = collect_predictions(model, dataset, batch_size, device)
     return compute_metrics(**result), result
 
-# Token metrics
+# Financial Token metrics
 
 def _sample_top_p(logits, num_paths=10, temperature=1.0, top_p=0.9):
     sorted_logits, sorted_ids = (logits / temperature).sort(dim=-1, descending=True)
@@ -196,3 +197,50 @@ def evaluate_token_model(model, train_data, test_data, tokenizer, batch_size=2, 
     token_metrics = token_topk_metrics(top_ids, token_targets, train_targets, horizons)
 
     return compute_metrics(**results), token_metrics, results
+
+# Weather metrics
+
+def weather_metrics(predictions, targets):
+    prediction, target = predictions[:, -1, 0, 0].float(), targets[:, -1, 0, 0].float()
+    prediction_anomaly, target_anomaly = prediction - prediction.mean(), target - target.mean()
+    denominator = (prediction_anomaly.square().sum() * target_anomaly.square().sum()).sqrt().clamp_min(1e-12)
+    offset = target.min() + 30
+    return {
+        "mae": float((prediction - target).abs().mean()),
+        "r": float((prediction_anomaly * target_anomaly).sum() / denominator),
+        "smape": float((2 * (prediction - target).abs() / ((prediction - offset).abs() + (target - offset).abs())).mean() * 100),
+    }
+
+
+def evaluate_weather(model, dataset, batch_size=64, device=None, return_graphs=False):
+    device = _device(device)
+    model = model.to(device).eval()
+    mean = dataset.target_mean.view(1, 1, -1, 1)
+    std = dataset.target_std.view(1, 1, -1, 1)
+    keys = ("predictions", "targets", "last_context_target", "sample_idx", "origin_idx", "origin_time", "target_times")
+    result = {key: [] for key in keys}
+    dynamic, mixed, static, alpha, beta = [], [], None, None, None
+
+    with torch.inference_mode():
+        for batch in DataLoader(dataset, batch_size=batch_size, shuffle=False):
+            output = model(batch["x"].to(device), return_graphs=return_graphs)
+            prediction, graphs = output if return_graphs else (output, None)
+            prediction = prediction.float().cpu() * std + mean
+
+            result["predictions"].append(prediction)
+            result["targets"].append(batch["y_raw"])
+            result["last_context_target"].append(batch["last_context_target"])
+            for key in ("sample_idx", "origin_idx", "origin_time", "target_times"):
+                result[key].append(batch[key])
+
+            if return_graphs:
+                dynamic.append(graphs["dynamic"].detach().cpu())
+                mixed.append(graphs["mixed"].detach().cpu())
+                static = graphs["static"].detach().cpu()[0]
+                alpha, beta = graphs["alpha"].detach().cpu(), graphs["beta"].detach().cpu()
+
+    result = {key: torch.cat(value) for key, value in result.items()}
+    if return_graphs:
+        result["graphs"] = {"static": static, "dynamic": torch.cat(dynamic), "mixed": torch.cat(mixed), "alpha": alpha, "beta": beta}
+    return weather_metrics(result["predictions"], result["targets"]), result
+

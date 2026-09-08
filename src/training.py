@@ -52,6 +52,17 @@ def _token_step(model, batch, device, use_amp):
         logits = model(context)
     return F.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), target.reshape(-1))
 
+def _weather_train_step(model, batch, device, use_amp):
+    with _autocast(device, use_amp):
+        prediction = model(batch["x"].to(device))
+    return F.mse_loss(prediction.float(), batch["y"].to(device).float())
+
+def _weather_val_step(model, batch, device, use_amp):
+    with _autocast(device, use_amp):
+        prediction = model(batch["x"].to(device))
+    target = batch["y"].to(device)
+    return F.mse_loss(prediction[:, -1, 0, 0].float(), target[:, -1, 0, 0].float())
+
 
 def _epoch(model, loader, step, device, optimizer=None, scaler=None, use_amp=False, clip=1.0):
     training = optimizer is not None
@@ -123,3 +134,8 @@ def train_continuous(model, train_data, val_data, save_path, lr=2.5e-4, graph_lr
 def train_tokens(model, train_data, val_data, save_path, lr=1e-4, graph_lr=5e-4):
     return _train(model, train_data, val_data, save_path, _token_step, batch_size=2,
                   lr=lr, graph_lr=graph_lr, decay_start=3)
+
+
+def train_weather(model, train_data, val_data, save_path, lr=2.5e-4, graph_lr=5e-4):
+    return _train(model, train_data, val_data, save_path, _weather_train_step, 16, lr, graph_lr, 15,
+                  val_step=_weather_val_step, val_batch_size=32)
