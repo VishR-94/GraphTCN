@@ -92,7 +92,8 @@ class FinanceDataset(Dataset):
             "last_close": last_close,
             "target_mean": target_mean,
             "target_std": target_std,
-            "day": day,
+            "day": str(day),
+            "sample_idx": day_idx,
             "origin_idx": origin,
         }
 

@@ -7,7 +7,7 @@ import torch
 from torch import nn
 
 
-modern_tcn_root = Path(__file__).resolve().parents[3] / "external" / "ModernTCN" / "ModernTCN-Long-term-forecasting"
+modern_tcn_root = Path(__file__).resolve().parents[2] / "external" / "ModernTCN" / "ModernTCN-Long-term-forecasting"
 sys.path.insert(0, str(modern_tcn_root))
 from models.ModernTCN import Model
 
