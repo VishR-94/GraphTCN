@@ -13,12 +13,6 @@ dist/
 .DS_Store
 .vscode/
 
-# Local data and generated outputs
-data/
-artifacts/
-outputs/
-checkpoints/
-
 # Model checkpoints
 *.pt
 *.pth
