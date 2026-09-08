@@ -125,3 +125,74 @@ def bootstrap_pearson(predictions, targets, last_close, sample_idx, n_bootstrap=
 def evaluate_model(model, dataset, batch_size=64, device=None):
     result = collect_predictions(model, dataset, batch_size, device)
     return compute_metrics(**result), result
+
+# Token metrics
+
+def _sample_top_p(logits, num_paths=10, temperature=1.0, top_p=0.9):
+    sorted_logits, sorted_ids = (logits / temperature).sort(dim=-1, descending=True)
+    probs = sorted_logits.softmax(dim=-1)
+    probs[(probs.cumsum(dim=-1) - probs) > top_p] = 0
+
+    flat_probs = probs.reshape(-1, probs.shape[-1])
+    flat_ids = sorted_ids.reshape(-1, sorted_ids.shape[-1])
+    samples = torch.multinomial(flat_probs, num_paths, replacement=True)
+    samples = flat_ids.gather(1, samples)
+
+    return samples.T.reshape(num_paths, *logits.shape[:-1])
+
+
+def token_topk_metrics(top_ids, targets, train_targets, horizons, vocabulary_size=1024, ks=(1, 5, 10)):
+    frequent = torch.stack([
+        torch.bincount(train_targets[:, h].reshape(-1), minlength=vocabulary_size).topk(max(ks)).indices
+        for h in range(train_targets.shape[1])
+    ])
+
+    metrics = {"horizons": tuple(horizons)}
+    for k in ks:
+        accuracy = top_ids[..., :k].eq(targets.unsqueeze(-1)).any(-1).float().mean((0, 2)) * 100
+        baseline = targets.unsqueeze(-1).eq(frequent[None, :, None, :k]).any(-1).float().mean((0, 2)) * 100
+        metrics[f"top_{k}_accuracy_pct"] = accuracy
+        metrics[f"top_{k}_excess_pct_points"] = accuracy - baseline
+
+    return metrics
+
+
+def evaluate_token_model(model, train_data, test_data, tokenizer, batch_size=2, num_paths=10,
+                         temperature=1.0, top_p=0.9, device=None, seed=42):
+    device = _device(device)
+    model = model.to(device).eval()
+
+    horizons = tuple(test_data.data["horizons"])
+    indices = torch.tensor([h - 1 for h in horizons])
+    results = {key: [] for key in ("predictions", "targets", "last_close", "sample_idx", "origin_idx")}
+    top_ids, token_targets = [], []
+
+    torch.manual_seed(seed)
+
+    with torch.inference_mode():
+        for batch in DataLoader(test_data, batch_size=batch_size, shuffle=False):
+            logits = model(batch["context_tokens"][..., 0].to(device)).float()
+            selected = logits.index_select(1, indices.to(device))
+
+            top_ids.append(selected.topk(10, dim=-1).indices.cpu())
+            token_targets.append(batch["target_s1"].index_select(1, indices))
+
+            paths = _sample_top_p(logits, num_paths, temperature, top_p).cpu()
+            decoded = torch.stack([
+                tokenizer.decode_coarse(batch["context_tokens"], path, batch["context_mean"], batch["context_std"])
+                for path in paths
+            ]).mean(0)
+
+            results["predictions"].append(decoded.index_select(1, indices)[..., 3:4])
+            results["targets"].append(batch["evaluation_true"][..., 3:4])
+            results["last_close"].append(batch["last_context_target"][..., 3:4])
+            results["sample_idx"].append(batch["sample_idx"])
+            results["origin_idx"].append(batch["origin_idx"])
+
+    results = {key: torch.cat(value) for key, value in results.items()}
+    top_ids = torch.cat(top_ids)
+    token_targets = torch.cat(token_targets)
+    train_targets = train_data.data["target_s1"].index_select(1, indices).long()
+    token_metrics = token_topk_metrics(top_ids, token_targets, train_targets, horizons)
+
+    return compute_metrics(**results), token_metrics, results
