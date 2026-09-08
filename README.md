@@ -2,7 +2,7 @@
 
 Implementation of GraphTCN, a geometric extension of ModernTCN for multivariate time-series forecasting.
 
-This repository contains the final financial and weather forecasting pipelines used in the dissertation.
+This repository contains the final financial and weather forecasting pipelines used in the dissertation. Note that all exploratory notebooks and data plotting utilities have been excluded from this repo.
 
 ## Repository structure
 
